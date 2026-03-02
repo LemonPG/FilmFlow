@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Main release job for all platforms
   release:
     strategy:
       matrix:
