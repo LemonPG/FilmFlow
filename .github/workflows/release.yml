@@ -4,7 +4,10 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
+
+# Add permissions section here
+permissions:
+  contents: write # Required to create releases and upload assets
 
 jobs:
   release:
