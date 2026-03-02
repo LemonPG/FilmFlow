@@ -1,0 +1,189 @@
+name: Release builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# =========== 新增：全局环境变量 ===========
+env:
+  # 设置代理服务器（根据实际情况修改）
+  HTTP_PROXY: "http://172.17.0.1:7890"
+  HTTPS_PROXY: "http://172.17.0.1:7890"
+  NO_PROXY: "localhost,127.0.0.1,*.internal"
+
+  # Docker 代理
+  DOCKER_BUILDKIT: "1"
+
+jobs:
+  # Main release job for all platforms
+  release:
+    strategy:
+      matrix:
+        target-platform: [""] # ["", "android", "freebsd", "linux_musl", "linux_musl_arm"]
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "🚀 The target platform is ${{ matrix.target-platform }}."
+      - name: List files in the repository
+        run: echo " ${{ gitea.workspace }}" && ls -la ${{ gitea.workspace }}
+      - name: Free Disk Space (Ubuntu)
+        if: matrix.target-platform == ''
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          # 递归克隆子模块（如果 115driver 是子模块）
+          submodules: recursive
+          fetch-depth: 0
+          token: ${{ vars.TOKEN115DRIVER }}
+
+          # =========== 新增：环境调试步骤 ===========
+      - name: Debug environment and files
+        id: debug
+        run: |
+          echo "=== 环境信息 ==="
+          echo "工作目录: $(pwd)"
+          echo "用户: $(whoami)"
+          echo "主机名: $(hostname)"
+          echo "Go 版本: $(go version)"
+          echo "Go 模块支持: $(go env GO111MODULE)"
+          echo "GOPATH: $(go env GOPATH)"
+          echo "GOROOT: $(go env GOROOT)"
+
+          echo ""
+          echo "=== 目录结构 ==="
+          ls -la
+          echo ""
+          echo "=== go.mod 文件检查 ==="
+          if [ -f "go.mod" ]; then
+            echo "✅ go.mod 文件存在"
+            echo "文件大小: $(wc -l < go.mod) 行"
+            echo "前20行内容:"
+            head -20 go.mod
+            echo ""
+            echo "模块名称: $(grep '^module ' go.mod | head -1)"
+          else
+            echo "❌ go.mod 文件不存在！"
+            echo "查找所有 go.mod 文件:"
+            find . -name "go.mod" 2>/dev/null
+          fi
+
+          echo ""
+          echo "=== Docker 检查 ==="
+          docker version
+          echo ""
+          echo "Docker 镜像列表 (xgo):"
+          docker images | grep -i xgo || echo "未找到 xgo 镜像"
+
+          echo ""
+          echo "=== 测试 Docker 挂载 ==="
+          echo "测试挂载当前目录到容器:"
+          docker run --rm -v $(pwd):/test alpine sh -c "
+            echo '1. 检查挂载点是否存在...'
+            if [ -d '/test' ]; then
+              echo '   ✅ /test 目录存在'
+              echo '2. 检查 go.mod 文件...'
+              if [ -f '/test/go.mod' ]; then
+                echo '   ✅ /test/go.mod 文件存在'
+                echo '3. 显示文件信息:'
+                ls -la /test/go.mod
+                echo '=== 挂载测试完成 ==='
+              else
+                echo '   ⚠️ /test/go.mod 文件不存在'
+                echo '   当前目录内容:'
+                ls -la /test/
+                echo '=== 挂载成功，但文件不存在 ==='
+              fi
+            else
+              echo '   ❌ /test 目录不存在 - 挂载失败'
+              echo '=== 挂载测试失败 ==='
+            fi
+          " || echo "❌ Docker 命令执行失败"
+
+          echo ""
+          echo "=== 文件权限检查 ==="
+          ls -la go.mod
+          stat go.mod
+
+      - name: Install build dependencies
+        #sudo snap install zig --classic --beta
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev gcc
+
+          echo "=== 拉取 xgo Docker 镜像 ==="
+          docker pull crazymax/xgo:latest
+          docker tag crazymax/xgo:latest ghcr.io/crazy-max/xgo:latest
+          docker images | grep xgo
+
+          echo "=== 安装 xgo 工具 ==="
+          go install github.com/crazy-max/xgo@latest
+          echo "xgo 安装路径: $(which xgo)"
+          xgo 2>&1 || echo "xgo 检查失败"
+
+          echo "=== 设置 XGO_IMAGE 环境变量 ==="
+          export XGO_IMAGE=ghcr.io/crazy-max/xgo:latest
+          echo "XGO_IMAGE=$XGO_IMAGE"
+
+          # =========== 新增：构建前调试 ===========
+      - name: Pre-build debugging
+        run: |
+          echo "=== 构建前调试 ==="
+          echo "当前目录: $(pwd)"
+          echo "PATH: $PATH"
+          echo "查看 xgo 可执行文件:"
+          which xgo
+          ls -la $(which xgo) 2>/dev/null || echo "xgo 不在 PATH 中"
+
+      - name: Build FilmFlow
+        run: |
+          echo "=== 开始构建 ==="
+          echo "环境变量:"
+          echo "XGO_IMAGE=$XGO_IMAGE"
+          echo "XGO_VERBOSE=$XGO_VERBOSE"
+          echo "当前目录: $(pwd)"
+
+          # 手动测试 xgo 命令
+          echo ""
+          echo "=== 手动测试 xgo 命令 ==="
+          set -x  # 开启命令追踪
+
+          # 首先尝试简单命令
+          echo "测试 xgo 列出目标平台:"
+          xgo --targets="linux/amd64" --out=test-build . 2>&1 | head -50 || echo "xgo 测试失败"
+
+          echo ""
+          echo "=== 运行 build.sh ==="
+          # 运行构建脚本，同时捕获详细输出
+          bash -x build.sh release ${{ matrix.target-platform }} 2>&1 | tee build.log
+
+          set +x
+          echo "✅ 构建完成"
+
+      - name: Create Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilmFlow Release Artifacts
+          path: build/
+
+      - name: Publish
+        uses: akkuman/gitea-release-action@v1
+        with:
+          title: Release
+          files: build/compress/*

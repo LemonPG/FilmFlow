@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FilmFlow</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif; padding: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 12px 0; }
+    label { display: block; margin-top: 8px; font-weight: 600; }
+    input { width: 100%; max-width: 640px; padding: 8px; }
+    button { padding: 8px 12px; margin-right: 8px; }
+    code { background: #f7f7f7; padding: 2px 4px; border-radius: 4px; }
+    .muted { color: #666; }
+    .status-ok { color: #0a7; font-weight: 700; }
+    .status-bad { color: #c00; font-weight: 700; }
+    ul { padding-left: 20px; }
+    .breadcrumb a { cursor: pointer; text-decoration: underline; }
+    .hidden { display: none; }
+    .auth-form { margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <h1>FilmFlow</h1>
+  <p class="muted">二维码登录 115 → 选择要监控的目录 → 配置  前缀/输出目录/扫描间隔 → 生成 .strm</p>
+
+  <!-- 用户认证卡片 -->
+  <div class="card" id="authCard">
+    <h2>用户认证</h2>
+    <div id="authStatus" class="muted">检查认证状态...</div>
+    
+    <!-- 设置密码表单（首次运行） -->
+    <div id="setupForm" class="auth-form hidden">
+      <p><strong>首次运行，请设置管理员密码</strong></p>
+      <label>用户名</label>
+      <input id="setupUsername" type="text" value="admin" readonly />
+      <label>密码</label>
+      <input id="setupPassword" type="password" placeholder="输入密码" />
+      <label>确认密码</label>
+      <input id="setupPasswordConfirm" type="password" placeholder="再次输入密码" />
+      <div class="row" style="margin-top: 12px;">
+        <button id="btnSetup">设置密码</button>
+      </div>
+      <div id="setupMessage" class="muted"></div>
+    </div>
+
+    <!-- 登录表单 -->
+    <div id="loginForm" class="auth-form hidden">
+      <p><strong>请输入密码登录</strong></p>
+      <label>用户名</label>
+      <input id="loginUsername" type="text" value="admin" readonly />
+      <label>密码</label>
+      <input id="loginPassword" type="password" placeholder="输入密码" />
+      <div class="row" style="margin-top: 12px;">
+        <button id="btnLoginAuth">登录</button>
+      </div>
+      <div id="loginMessage" class="muted"></div>
+    </div>
+
+    <!-- 已登录状态 -->
+    <div id="loggedInStatus" class="hidden">
+      <p><span class="status-ok">已登录</span> 用户: <code id="loggedInUser">admin</code></p>
+      <button id="btnLogout">退出登录</button>
+    </div>
+  </div>
+
+  <!-- 主功能区域（默认隐藏，认证后显示） -->
+  <div id="mainContent" class="hidden">
+    <div class="card">
+    <h2>1) 115登录</h2>
+      <div id="loginState">{{if .LoggedIn}}已登录{{else}}未登录{{end}}</div>
+      {{if .LoggedIn}}
+      <div class="muted">登录类型: <code>{{.LoginType}}</code></div>
+      {{end}}
+      <div class="row" style="align-items:center;">
+        <button id="btnStartQR">生成二维码</button>
+        <button id="btnPoll" disabled>轮询状态</button>
+        <button id="btnLogin" disabled>确认登录</button>
+        <label style="margin:0 0 0 12px; font-weight:600;">登录类型</label>
+        <select id="loginApp" style="padding:8px;">
+          <option value="web" selected>网页 (web)</option>
+          <option value="android">Android</option>
+          <option value="ios">iOS</option>
+          <option value="tv">TV</option>
+          <option value="alipaymini">支付宝小程序</option>
+          <option value="wechatmini">微信小程序</option>
+        </select>
+      </div>
+      <div style="margin-top: 12px;">
+        <img id="qrImg" alt="QRCode" style="display:none; width: 256px; height: 256px; border:1px solid #ddd;"/>
+        <div id="qrStatus" class="muted"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2) 目录选择（115）</h2>
+      <div class="muted">当前选中 CID: <code id="selectedCid">{{.Config.SelectedCID}}</code></div>
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <div class="row" style="align-items:center; margin-top: 8px;">
+        <button id="btnLoadDirs">加载当前目录子目录</button>
+        <button id="btnUseThis">将当前目录设为监控目录</button>
+        <button id="btnSetPending">设为待整理目录</button>
+        <button id="btnSetExisting">设为已存在目录</button>
+        <button id="btnSetRedundant">设为冗余数据目录</button>
+        <button id="btnUpdateDirectory">更新当前目录变动</button>
+        <button id="btnLoadMore" style="display:none;">加载更多</button>
+      </div>
+      <ul id="dirList"></ul>
+    </div>
+
+    <div class="card">
+      <h2>3) 参数配置</h2>
+      <label>本地输出目录（.strm 放这里）</label>
+      <input id="outputDir" placeholder="例如 D:\\Media\\strm" value="{{.Config.OutputDir}}" />
+
+      <label>url 302 直链前缀</label>
+      <input id="urlPrefix" placeholder="例如 http://127.0.0.1:5244/d/115" value="{{.Config.UrlPrefix}}" />
+
+      <label>扫描间隔（分钟）</label>
+      <input id="scanInterval" type="number" min="1" value="{{.Config.ScanInterval}}" />
+
+      <label>请求限流（每秒请求数，0表示无限制）</label>
+      <input id="rateLimit" type="number" min="0" step="0.1" value="{{.Config.RateLimit}}" />
+
+      <label>扫描文件后缀名（逗号分隔，空表示所有文件）</label>
+      <input id="scanExtensions" placeholder="例如 .mp4,.mkv,.avi,.mov" value="{{range $i, $ext := .Config.ScanExtensions}}{{if $i}},{{end}}{{$ext}}{{end}}" />
+
+      <label>直接下载文件后缀名（逗号分隔，空表示不下载）</label>
+      <input id="downloadExtensions" placeholder="例如 .jpg,.jpeg,.png,.gif,.bmp,.txt,.pdf" value="{{range $i, $ext := .Config.DownloadExtensions}}{{if $i}},{{end}}{{$ext}}{{end}}" />
+
+      <div class="row" style="margin-top: 12px;">
+        <button id="btnSave">保存配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>4) 扫描与生成</h2>
+      <div>最近扫描：<code id="lastScanAt">{{.LastScanAt}}</code></div>
+      <div>最近结果：<code id="lastScanMsg">{{.LastScanMsg}}</code></div>
+      <div>最近错误：<code id="lastErr">{{.LastErr}}</code></div>
+      <div class="row" style="margin-top: 8px;">
+        <button id="btnScanOnce">全量扫描</button>
+        <button id="btnScanIncremental">增量扫描</button>
+        <button id="btnScanProcess">扫描待整理目录</button>
+        <button id="btnStart">启动定时扫描</button>
+        <button id="btnStop">停止定时扫描</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+let session = null;
+let pollTimer = null;
+let currentCid = '0';
+try {
+  const v = document.getElementById('selectedCid')?.textContent?.trim();
+  if (v) currentCid = v;
+} catch (e) {}
+
+// 认证相关变量
+let isAuthenticated = false;
+let isSetup = false;
+
+// 检查认证状态
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth/check');
+    const data = await res.json();
+    
+    if (data.authenticated) {
+      showLoggedInStatus(data.username);
+      isAuthenticated = true;
+      isSetup = data.isSetup;
+    } else {
+      // 没有用户，显示设置密码表单
+      if (data.isSetup) {
+        // 已设置密码，显示登录表单
+        showLoginForm();
+      } else {
+        // 未设置密码，显示设置密码表单
+        showSetupForm();
+      }
+    }
+  } catch (error) {
+    console.error('检查认证状态失败:', error);
+    document.getElementById('authStatus').textContent = '检查认证状态失败';
+  }
+}
+
+function showSetupForm() {
+  document.getElementById('authStatus').textContent = '首次运行，请设置管理员密码';
+  document.getElementById('setupForm').classList.remove('hidden');
+  document.getElementById('loginForm').classList.add('hidden');
+  document.getElementById('loggedInStatus').classList.add('hidden');
+  document.getElementById('mainContent').classList.add('hidden');
+}
+
+function showLoginForm() {
+  document.getElementById('authStatus').textContent = '请输入密码登录';
+  document.getElementById('setupForm').classList.add('hidden');
+  document.getElementById('loginForm').classList.remove('hidden');
+  document.getElementById('loggedInStatus').classList.add('hidden');
+  document.getElementById('mainContent').classList.add('hidden');
+}
+
+function showLoggedInStatus(username) {
+  document.getElementById('authStatus').textContent = '已登录';
+  document.getElementById('setupForm').classList.add('hidden');
+  document.getElementById('loginForm').classList.add('hidden');
+  document.getElementById('loggedInStatus').classList.remove('hidden');
+  document.getElementById('mainContent').classList.remove('hidden');
+  document.getElementById('loggedInUser').textContent = username;
+}
+
+// 设置密码
+document.getElementById('btnSetup').onclick = async () => {
+  const username = document.getElementById('setupUsername').value;
+  const password = document.getElementById('setupPassword').value;
+  const passwordConfirm = document.getElementById('setupPasswordConfirm').value;
+  
+  if (!password) {
+    document.getElementById('setupMessage').textContent = '密码不能为空';
+    document.getElementById('setupMessage').style.color = '#c00';
+    return;
+  }
+  
+  if (password !== passwordConfirm) {
+    document.getElementById('setupMessage').textContent = '两次输入的密码不一致';
+    document.getElementById('setupMessage').style.color = '#c00';
+    return;
+  }
+  
+  try {
+    const res = await fetch('/api/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    
+    const data = await res.json();
+    
+    if (res.ok) {
+      document.getElementById('setupMessage').textContent = '密码设置成功，请登录';
+      document.getElementById('setupMessage').style.color = '#0a7';
+      setTimeout(() => {
+        showLoginForm();
+      }, 1000);
+    } else {
+      document.getElementById('setupMessage').textContent = data.error || '设置密码失败';
+      document.getElementById('setupMessage').style.color = '#c00';
+    }
+  } catch (error) {
+    document.getElementById('setupMessage').textContent = '请求失败: ' + error.message;
+    document.getElementById('setupMessage').style.color = '#c00';
+  }
+};
+
+// 登录
+document.getElementById('btnLoginAuth').onclick = async () => {
+  const username = document.getElementById('loginUsername').value;
+  const password = document.getElementById('loginPassword').value;
+  
+  if (!password) {
+    document.getElementById('loginMessage').textContent = '密码不能为空';
+    document.getElementById('loginMessage').style.color = '#c00';
+    return;
+  }
+  
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    
+    const data = await res.json();
+    
+    if (res.ok) {
+      document.getElementById('loginMessage').textContent = '登录成功';
+      document.getElementById('loginMessage').style.color = '#0a7';
+      isAuthenticated = true;
+      setTimeout(() => {
+        showLoggedInStatus(username);
+      }, 500);
+    } else {
+      document.getElementById('loginMessage').textContent = data.error || '登录失败';
+      document.getElementById('loginMessage').style.color = '#c00';
+    }
+  } catch (error) {
+    document.getElementById('loginMessage').textContent = '请求失败: ' + error.message;
+    document.getElementById('loginMessage').style.color = '#c00';
+  }
+};
+
+// 退出登录
+document.getElementById('btnLogout').onclick = async () => {
+  try {
+    const res = await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (res.ok) {
+      // 注销成功，刷新页面
+      location.reload();
+    } else {
+      const data = await res.json();
+      alert('注销失败: ' + (data.error || '未知错误'));
+    }
+  } catch (error) {
+    console.error('注销请求失败:', error);
+    alert('注销请求失败: ' + error.message);
+  }
+};
+
+// 页面加载时检查认证状态
+window.addEventListener('DOMContentLoaded', () => {
+  checkAuth();
+});
+
+// 原有的115登录相关函数
+function set115LoginState(ok, msg) {
+  const el = document.getElementById('loginState');
+  el.innerHTML = ok
+    ? `<span class="status-ok">115已登录</span> <span class="muted">${msg||''}</span>`
+    : `<span class="status-bad">115未登录</span> <span class="muted">${msg||''}</span>`;
+}
+
+set115LoginState(document.getElementById('loginState')?.textContent?.includes('已登录') || false, '（115凭证保存在 config.json）');
+
+async function postJSON(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body||{}) });
+  if (!res.ok) {
+    if (res.status === 401) {
+      // 未认证，刷新页面重新登录
+      //alert('会话已过期，请重新登录');
+      //location.reload();
+      throw new Error('Unauthorized');
+    }
+    throw new Error(await res.text());
+  }
+  return await res.json();
+}
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    if (res.status === 401) {
+      // 未认证，刷新页面重新登录
+      //alert('会话已过期，请重新登录');
+      //location.reload();
+      throw new Error('Unauthorized');
+    }
+    throw new Error(await res.text());
+  }
+  return await res.json();
+}
+
+document.getElementById('btnStartQR').onclick = async () => {
+  const data = await postJSON('/api/qrcode/start', {});
+  session = data.session;
+  document.getElementById('qrImg').src = `data:image/png;base64,${data.pngBase64}`;
+  document.getElementById('qrImg').style.display = 'block';
+  document.getElementById('btnPoll').disabled = false;
+  document.getElementById('btnLogin').disabled = false;
+  document.getElementById('qrStatus').textContent = '请用 115 App 扫码。';
+};
+
+document.getElementById('btnPoll').onclick = async () => {
+  if (!session) return;
+  const data = await postJSON('/api/qrcode/status', { session });
+  const st = data.status;
+  document.getElementById('qrStatus').textContent = `状态：${st.status}（0等待 1已扫 2已确认 -1过期 -2取消） ${st.msg||''}`;
+};
+
+document.getElementById('btnLogin').onclick = async () => {
+  if (!session) return;
+  const app = (document.getElementById('loginApp').value || 'web');
+  const data = await postJSON('/api/qrcode/login', { session, app });
+  if (data.ok) {
+    set115LoginState(true, '登录成功，已保存。');
+    document.getElementById('qrStatus').textContent = '登录成功。';
+  } else {
+    document.getElementById('qrStatus').textContent = '尚未在手机端确认登录。请先确认。';
+  }
+};
+
+let currentOffset = 0;
+const limit = 100;
+
+function renderDirs(list, clear) {
+  const ul = document.getElementById('dirList');
+  if (clear) {
+    ul.innerHTML = '';
+  }
+  list.forEach(d => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.textContent = `${d.name} (cid=${d.cid})`;
+    a.href = '#';
+    a.onclick = (e) => { e.preventDefault(); currentCid = d.cid; document.getElementById('selectedCid').textContent = currentCid; loadDirs(true); };
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+
+  const btnLoadMore = document.getElementById('btnLoadMore');
+  if (list.length < limit) {
+    btnLoadMore.style.display = 'none';
+  } else {
+    btnLoadMore.style.display = 'inline-block';
+  }
+}
+
+async function loadDirs(clear) {
+  if (clear) {
+    currentOffset = 0;
+  }
+  document.getElementById('breadcrumb').innerHTML = `当前 CID: <code>${currentCid}</code>`;
+  const list = await getJSON(`/api/dir/list?cid=${currentCid}&offset=${currentOffset}&limit=${limit}`);
+  renderDirs(list, clear);
+  currentOffset += list.length;
+}
+
+document.getElementById('btnLoadDirs').onclick = () => loadDirs(true);
+document.getElementById('btnLoadMore').onclick = () => loadDirs(false);
+
+document.getElementById('btnUseThis').onclick = async () => {
+  const cid = currentCid;
+  await postJSON('/api/config', { selectedCid: cid });
+  document.getElementById('selectedCid').textContent = cid;
+  alert(`已将 CID ${cid} 设为监控目录`);
+};
+
+document.getElementById('btnSetPending').onclick = async () => {
+  const cid = currentCid;
+  await postJSON('/api/config', { pendingCid: cid });
+  alert(`已将 CID ${cid} 设为待整理目录`);
+};
+
+document.getElementById('btnSetExisting').onclick = async () => {
+  const cid = currentCid;
+  await postJSON('/api/config', { existingCid: cid });
+  alert(`已将 CID ${cid} 设为已存在目录`);
+};
+
+document.getElementById('btnSetRedundant').onclick = async () => {
+  const cid = currentCid;
+  await postJSON('/api/config', { redundantCid: cid });
+  alert(`已将 CID ${cid} 设为冗余数据目录`);
+};
+
+document.getElementById('btnUpdateDirectory').onclick = async () => {
+  const cid = currentCid;
+  if (!cid || cid === '0') {
+    alert('请先选择一个目录');
+    return;
+  }
+  
+  try {
+    const data = await postJSON('/api/directory/update', { cid });
+    document.getElementById('lastScanMsg').textContent = `directory update: created=${data.created} updated=${data.updated} skipped=${data.skipped}`;
+    document.getElementById('lastScanAt').textContent = new Date().toISOString();
+    alert(`目录更新完成: 新增=${data.created} 更新=${data.updated} 跳过=${data.skipped}\n${data.message}`);
+  } catch (error) {
+    alert('目录更新失败: ' + error.message);
+  }
+};
+
+document.getElementById('btnSave').onclick = async () => {
+  const outputDir = document.getElementById('outputDir').value;
+  const urlPrefix = document.getElementById('urlPrefix').value;
+  const scanInterval = parseInt(document.getElementById('scanInterval').value);
+  const rateLimit = parseFloat(document.getElementById('rateLimit').value);
+  const scanExtensions = document.getElementById('scanExtensions').value.split(',').map(s => s.trim()).filter(s => s);
+  const downloadExtensions = document.getElementById('downloadExtensions').value.split(',').map(s => s.trim()).filter(s => s);
+  
+  await postJSON('/api/config', {
+    outputDir,
+    urlPrefix,
+    scanIntervalMinutes: scanInterval,
+    rateLimit,
+    scanExtensions,
+    downloadExtensions
+  });
+  alert('配置已保存');
+};
+
+document.getElementById('btnScanOnce').onclick = async () => {
+  const data = await postJSON('/api/scan/once', {});
+  document.getElementById('lastScanMsg').textContent = `created=${data.created} updated=${data.updated} skipped=${data.skipped}`;
+  document.getElementById('lastScanAt').textContent = new Date().toISOString();
+  alert('全量扫描完成');
+};
+
+document.getElementById('btnScanIncremental').onclick = async () => {
+  const data = await postJSON('/api/scan/incremental', {});
+  document.getElementById('lastScanMsg').textContent = `incremental: created=${data.created} updated=${data.updated} skipped=${data.skipped}`;
+  document.getElementById('lastScanAt').textContent = new Date().toISOString();
+  alert('增量扫描完成');
+};
+
+document.getElementById('btnScanProcess').onclick = async () => {
+  try {
+    const data = await postJSON('/api/scan/process', {});
+    document.getElementById('lastScanMsg').textContent = `待整理目录扫描已启动: ${data.message}`;
+    document.getElementById('lastScanAt').textContent = new Date().toISOString();
+    alert('待整理目录扫描已启动');
+  } catch (error) {
+    alert('扫描待整理目录失败: ' + error.message);
+  }
+};
+
+document.getElementById('btnStart').onclick = async () => {
+  await postJSON('/api/scan/start', {});
+  alert('定时扫描已启动');
+};
+
+document.getElementById('btnStop').onclick = async () => {
+  await postJSON('/api/scan/stop', {});
+  alert('定时扫描已停止');
+};
+
+// 页面加载时加载目录
+window.addEventListener('DOMContentLoaded', () => {
+  if (currentCid !== '0') {
+    loadDirs(true);
+  }
+});
+</script>
+</body>
+</html>
