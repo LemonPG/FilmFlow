@@ -1,4 +1,4 @@
-module filmflow
+module github.com/LemonPG/FilmFlow
 
 go 1.25.3
 

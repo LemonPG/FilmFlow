@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"filmflow/internal/app"
+	"github.com/LemonPG/FilmFlow/internal/app"
 
 	"github.com/spf13/cobra"
 )

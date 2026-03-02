@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"filmflow/internal/app"
+	"internal/app"
 )
 
 func TestParseFolderName(t *testing.T) {

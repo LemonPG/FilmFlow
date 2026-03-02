@@ -1,3 +1,5 @@
+github.com/LemonPG/115driver v1.1.1 h1:zMEMOgi4EyP12dIsLqfQxW6eV4OLMON//9IgOGafCMM=
+github.com/LemonPG/115driver v1.1.1/go.mod h1:XLz/UvmOIsEeGSx9/V4XeEUi3Gm54uWkUtqP8RMJR3E=
 github.com/aead/ecdh v0.2.0 h1:pYop54xVaq/CEREFEcukHRZfTdjiWvYIsZDXXrBapQQ=
 github.com/aead/ecdh v0.2.0/go.mod h1:a9HHtXuSo8J1Js1MwLQx2mBhkXMT6YwUmVVEY4tTB8U=
 github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible h1:8psS8a+wKfiLt1iVDX79F7Y6wUM49Lcha2FMXt4UM8g=
