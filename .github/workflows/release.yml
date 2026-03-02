@@ -6,16 +6,6 @@ on:
       - "v*"
   workflow_dispatch:
 
-# =========== 新增：全局环境变量 ===========
-env:
-  # 设置代理服务器（根据实际情况修改）
-  HTTP_PROXY: "http://172.17.0.1:7890"
-  HTTPS_PROXY: "http://172.17.0.1:7890"
-  NO_PROXY: "localhost,127.0.0.1,*.internal"
-
-  # Docker 代理
-  DOCKER_BUILDKIT: "1"
-
 jobs:
   # Main release job for all platforms
   release:
